@@ -73,6 +73,64 @@ function isImageFile(filename) {
   return imageExtensions.includes(ext);
 }
 
+// Check if current filename is already good enough
+function isFilenameGoodEnough(currentFilename, aiDescription) {
+  const ext = path.extname(currentFilename).toLowerCase();
+  const nameWithoutExt = path.basename(currentFilename, ext).toLowerCase();
+
+  // Skip generic names like "img_1234", "dsc_5678", "screenshot", etc.
+  const genericPatterns = [
+    /^img[-_]?\d+$/i,           // img123, img_123, img-123
+    /^dsc[-_]?\d+$/i,           // dsc123, dsc_123
+    /^image[-_]?\d+$/i,         // image123
+    /^photo[-_]?\d+$/i,         // photo123
+    /^screenshot/i,             // screenshot*
+    /^pic[-_]?\d+$/i,           // pic123
+    /^\d{8}[-_]\d{6}$/,         // 20231231_123456 (phone camera format)
+    /^[a-f0-9]{8,}$/i,          // long hex strings (random IDs)
+    /^untitled/i,               // untitled
+    /^new[-_]?image/i,          // new-image, newimage
+  ];
+
+  // If filename matches generic pattern, it needs renaming
+  for (const pattern of genericPatterns) {
+    if (pattern.test(nameWithoutExt)) {
+      return false;
+    }
+  }
+
+  // Extract meaningful words from both filename and description
+  const descWords = aiDescription
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(word => word.length > 2); // Only words longer than 2 chars
+
+  const nameWords = nameWithoutExt
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(word => word.length > 2);
+
+  // If filename has descriptive words that overlap with AI description
+  // consider it good enough (at least 2 word matches or 40% overlap)
+  let matchCount = 0;
+  for (const descWord of descWords) {
+    for (const nameWord of nameWords) {
+      // Check for substring match (e.g., "cat" matches "cats")
+      if (descWord.includes(nameWord) || nameWord.includes(descWord)) {
+        matchCount++;
+        break;
+      }
+    }
+  }
+
+  // Consider good if:
+  // - At least 2 words match, OR
+  // - 40% or more of description words are in the filename
+  const overlapRatio = descWords.length > 0 ? matchCount / descWords.length : 0;
+  return matchCount >= 2 || overlapRatio >= 0.4;
+}
+
 // Create a safe filename from AI description
 function createSafeFilename(description, originalFilename) {
   let safeName = description
@@ -227,6 +285,13 @@ async function renameImagesInFolder() {
         // Get AI description
         const description = await getImageDescription(captioner, imagePath);
         console.log(`  💡 Description: "${description}"`);
+
+        // Check if current filename is already good enough
+        if (isFilenameGoodEnough(filename, description)) {
+          console.log(`  ✓ Current name is already descriptive - skipping\n`);
+          skipped++;
+          continue;
+        }
 
         // Create new filename
         const newFilename = createSafeFilename(description, filename);
