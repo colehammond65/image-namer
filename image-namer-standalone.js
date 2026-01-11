@@ -9,36 +9,42 @@ const path = require('path');
 // Get folder from command line argument (required)
 const IMAGES_FOLDER = process.argv[2];
 
+// Suppress ONNX runtime warnings early
+process.env.ORT_LOG_SEVERITY_LEVEL = '3';  // 3=Error, 2=Fatal only
+process.env.ORT_LOGGING_LEVEL = 'error';
+
 // Dynamic import for transformers (ES module)
 let pipeline, RawImage;
 
-// ================= GPU CHANGE =================
-const ort = require('onnxruntime-node');
-
-function detectDevice() {
-  try {
-    const providers = ort.getAvailableExecutionProviders();
-    if (providers.includes('CUDAExecutionProvider')) {
-      console.log('🚀 CUDA detected — using GPU acceleration');
-      return 'cuda';
-    }
-  } catch {
-    // ignore
-  }
-  console.log('💻 CUDA not available — using CPU');
-  return 'cpu';
+// Try to preload onnxruntime-node for GPU support
+let useGPU = false;
+try {
+  require('onnxruntime-node');
+  useGPU = true;
+} catch (e) {
+  // Will fall back to WASM
 }
-// ==============================================
 
 async function loadTransformers() {
   console.log('📦 Loading AI libraries...');
 
-  // Suppress ONNX runtime warnings
-  process.env.ORT_LOG_SEVERITY_LEVEL = '5';  // Only show errors
-
   const transformers = await import('@xenova/transformers');
   pipeline = transformers.pipeline;
   RawImage = transformers.RawImage;
+
+  if (useGPU) {
+    // Disable WASM to use onnxruntime-node
+    transformers.env.backends.onnx.wasm.proxy = false;
+    console.log('🚀 onnxruntime-node loaded (attempting GPU via DirectML)');
+    console.log('   Note: @xenova/transformers has limited GPU support in Node.js');
+    console.log('   CPU will still handle preprocessing - high CPU usage is normal');
+  } else {
+    // Use optimized WASM
+    transformers.env.backends.onnx.wasm.numThreads = 8;
+    transformers.env.backends.onnx.wasm.simd = true;
+    console.log('💻 Using optimized CPU (8 threads)');
+  }
+
   console.log('✅ Libraries loaded!\n');
 }
 
@@ -93,20 +99,10 @@ async function initializeModel() {
   console.log('   (First run will download ~100MB model - please wait)\n');
 
   try {
-    // ================= GPU CHANGE =================
-    const device = detectDevice();
-    // ==============================================
-
     // Use vit-gpt2 model (reliable and available)
     const captioner = await pipeline(
       'image-to-text',
-      'Xenova/vit-gpt2-image-captioning',
-      {
-        // ================= GPU CHANGE =================
-        device,
-        dtype: device === 'cuda' ? 'fp16' : 'fp32'
-        // ==============================================
-      }
+      'Xenova/vit-gpt2-image-captioning'
     );
 
     console.log('✅ Model ready!\n');
